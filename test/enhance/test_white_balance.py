@@ -1,310 +1,256 @@
+from typing import Tuple
+
 import pytest
 import torch
 from torch.autograd import gradcheck
 
-import kornia
-import kornia.testing as utils  # test utils
-from kornia.testing import BaseTester, assert_close
+from kornia import enhance
+from kornia.geometry import rotate
+from kornia.testing import BaseTester, assert_close, tensor_to_gradcheck_var
 
 
-class TestNormalize:
+class TestEqualization(BaseTester):
     def test_smoke(self, device, dtype):
-        mean = [0.5]
-        std = [0.1]
-        repr = "Normalize(mean=tensor([0.5000]), std=tensor([0.1000]))"
-        assert str(kornia.enhance.Normalize(mean, std)) == repr
+        C, H, W = 1, 10, 20
+        img = torch.rand(C, H, W, device=device, dtype=dtype)
+        res = enhance.equalize_clahe(img)
+        assert isinstance(res, torch.Tensor)
+        assert res.shape == img.shape
+        assert res.device == img.device
+        assert res.dtype == img.dtype
 
-    def test_normalize(self, device, dtype):
-
-        # prepare input data
-        data = torch.ones(1, 2, 2, device=device, dtype=dtype)
-        mean = torch.tensor([0.5], device=device, dtype=dtype)
-        std = torch.tensor([2.0], device=device, dtype=dtype)
-
-        # expected output
-        expected = torch.tensor([0.25], device=device, dtype=dtype).repeat(1, 2, 2).view_as(data)
-
-        f = kornia.enhance.Normalize(mean, std)
-        assert_close(f(data), expected)
-
-    def test_broadcast_normalize(self, device, dtype):
-
-        # prepare input data
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-
-        mean = torch.tensor([2.0], device=device, dtype=dtype)
-        std = torch.tensor([0.5], device=device, dtype=dtype)
-
-        # expected output
-        expected = torch.ones_like(data) + 1
-
-        f = kornia.enhance.Normalize(mean, std)
-        assert_close(f(data), expected)
-
-    def test_float_input(self, device, dtype):
-
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-
-        mean: float = 2.0
-        std: float = 0.5
-
-        # expected output
-        expected = torch.ones_like(data) + 1
-
-        f = kornia.enhance.Normalize(mean, std)
-        assert_close(f(data), expected)
-
-    def test_batch_normalize(self, device, dtype):
-
-        # prepare input data
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-
-        # expected output
-        expected = torch.tensor([1.25, 1, 0.5], device=device, dtype=dtype).repeat(2, 1, 1).view_as(data)
-
-        f = kornia.enhance.Normalize(mean, std)
-        assert_close(f(data), expected)
-
-    @pytest.mark.skip(reason="union type not supported")
-    def test_jit(self, device, dtype):
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        inputs = (data, mean, std)
-
-        op = kornia.enhance.normalize
-        op_script = torch.jit.script(op)
-
-        assert_close(op(*inputs), op_script(*inputs))
-
-    def test_gradcheck(self, device, dtype):
-        # prepare input data
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-
-        data = utils.tensor_to_gradcheck_var(data)  # to var
-        mean = utils.tensor_to_gradcheck_var(mean)  # to var
-        std = utils.tensor_to_gradcheck_var(std)  # to var
-
-        assert gradcheck(kornia.enhance.Normalize(mean, std), (data,), raise_exception=True)
-
-    def test_single_value(self, device, dtype):
-        # prepare input data
-        mean = torch.tensor(2, device=device, dtype=dtype)
-        std = torch.tensor(3, device=device, dtype=dtype)
-        data = torch.ones(2, 3, 256, 313, device=device, dtype=dtype)
-
-        # expected output
-        expected = (data - mean) / std
-
-        assert_close(kornia.enhance.normalize(data, mean, std), expected)
-
-    def test_module(self, device, dtype):
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        inputs = (data, mean, std)
-
-        op = kornia.enhance.normalize
-        op_module = kornia.enhance.Normalize(mean, std)
-
-        assert_close(op(*inputs), op_module(data))
-
-    @staticmethod
-    @pytest.mark.parametrize(
-        "mean, std", [((1.0, 1.0, 1.0), (0.5, 0.5, 0.5)), (1.0, 0.5), (torch.tensor([1.0]), torch.tensor([0.5]))]
-    )
-    def test_random_normalize_different_parameter_types(mean, std):
-        f = kornia.enhance.Normalize(mean=mean, std=std)
-        data = torch.ones(2, 3, 256, 313)
-        if isinstance(mean, float):
-            expected = (data - torch.as_tensor(mean)) / torch.as_tensor(std)
+    @pytest.mark.parametrize("B, C", [(None, 1), (None, 3), (1, 1), (1, 3), (4, 1), (4, 3)])
+    def test_cardinality(self, B, C, device, dtype):
+        H, W = 10, 20
+        if B is None:
+            img = torch.rand(C, H, W, device=device, dtype=dtype)
         else:
-            expected = (data - torch.as_tensor(mean[0])) / torch.as_tensor(std[0])
-        assert_close(f(data), expected)
+            img = torch.rand(B, C, H, W, device=device, dtype=dtype)
+        res = enhance.equalize_clahe(img)
+        assert res.shape == img.shape
 
-    @staticmethod
-    @pytest.mark.parametrize("mean, std", [((1.0, 1.0, 1.0, 1.0), (0.5, 0.5, 0.5, 0.5)), ((1.0, 1.0), (0.5, 0.5))])
-    def test_random_normalize_invalid_parameter_shape(mean, std):
-        f = kornia.enhance.Normalize(mean=mean, std=std)
-        inputs = torch.arange(0.0, 16.0, step=1).reshape(1, 4, 4).unsqueeze(0)
+    @pytest.mark.parametrize("clip, grid", [(0.0, None), (None, (2, 2)), (2.0, (2, 2))])
+    def test_optional_params(self, clip, grid, device, dtype):
+        C, H, W = 1, 10, 20
+        img = torch.rand(C, H, W, device=device, dtype=dtype)
+        if clip is None:
+            res = enhance.equalize_clahe(img, grid_size=grid)
+        elif grid is None:
+            res = enhance.equalize_clahe(img, clip_limit=clip)
+        else:
+            res = enhance.equalize_clahe(img, clip, grid)
+        assert isinstance(res, torch.Tensor)
+        assert res.shape == img.shape
+
+    @pytest.mark.parametrize(
+        "B, clip, grid, exception_type",
+        [
+            (0, 1.0, (2, 2), ValueError),
+            (1, 1, (2, 2), TypeError),
+            (1, 2.0, 2, TypeError),
+            (1, 2.0, (2, 2, 2), TypeError),
+            (1, 2.0, (2, 2.0), TypeError),
+            (1, 2.0, (2, 0), ValueError),
+        ],
+    )
+    def test_exception(self, B, clip, grid, exception_type):
+        C, H, W = 1, 10, 20
+        img = torch.rand(B, C, H, W)
+        with pytest.raises(exception_type):
+            enhance.equalize_clahe(img, clip, grid)
+
+    @pytest.mark.parametrize("dims", [(1, 1, 1, 1, 1), (1, 1)])
+    def test_exception_tensor_dims(self, dims):
+        img = torch.rand(dims)
         with pytest.raises(ValueError):
-            f(inputs)
+            enhance.equalize_clahe(img)
 
-
-class TestDenormalize:
-    def test_smoke(self, device, dtype):
-        mean = [0.5]
-        std = [0.1]
-        repr = "Denormalize(mean=[0.5], std=[0.1])"
-        assert str(kornia.enhance.Denormalize(mean, std)) == repr
-
-    def test_denormalize(self, device, dtype):
-
-        # prepare input data
-        data = torch.ones(1, 2, 2, device=device, dtype=dtype)
-        mean = torch.tensor([0.5])
-        std = torch.tensor([2.0])
-
-        # expected output
-        expected = torch.tensor([2.5], device=device, dtype=dtype).repeat(1, 2, 2).view_as(data)
-
-        f = kornia.enhance.Denormalize(mean, std)
-        assert_close(f(data), expected)
-
-    def test_broadcast_denormalize(self, device, dtype):
-
-        # prepare input data
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-
-        mean = torch.tensor([2.0], device=device, dtype=dtype)
-        std = torch.tensor([0.5], device=device, dtype=dtype)
-
-        # expected output
-        expected = torch.ones_like(data) + 2.5
-
-        f = kornia.enhance.Denormalize(mean, std)
-        assert_close(f(data), expected)
-
-    def test_float_input(self, device, dtype):
-
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-
-        mean: float = 2.0
-        std: float = 0.5
-
-        # expected output
-        expected = torch.ones_like(data) + 2.5
-
-        f = kornia.enhance.Denormalize(mean, std)
-        assert_close(f(data), expected)
-
-    def test_batch_denormalize(self, device, dtype):
-
-        # prepare input data
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-
-        # expected output
-        expected = torch.tensor([6.5, 7, 8], device=device, dtype=dtype).repeat(2, 1, 1).view_as(data)
-
-        f = kornia.enhance.Denormalize(mean, std)
-        assert_close(f(data), expected)
-
-    @pytest.mark.skip(reason="union type not supported")
-    def test_jit(self, device, dtype):
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        inputs = (data, mean, std)
-
-        op = kornia.enhance.denormalize
-        op_script = torch.jit.script(op)
-
-        assert_close(op(*inputs), op_script(*inputs))
+    def test_exception_tensor_type(self):
+        with pytest.raises(TypeError):
+            enhance.equalize_clahe([1, 2, 3])
 
     def test_gradcheck(self, device, dtype):
+        torch.random.manual_seed(4)
+        bs, channels, height, width = 1, 1, 11, 11
+        inputs = torch.rand(bs, channels, height, width, device=device, dtype=dtype)
+        inputs = tensor_to_gradcheck_var(inputs)
 
-        # prepare input data
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        data += 2
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype)
+        def grad_rot(input, a, b, c):
+            rot = rotate(input, torch.tensor(30.0, dtype=input.dtype, device=device))
+            return enhance.equalize_clahe(rot, a, b, c)
 
-        data = utils.tensor_to_gradcheck_var(data)  # to var
-        mean = utils.tensor_to_gradcheck_var(mean)  # to var
-        std = utils.tensor_to_gradcheck_var(std)  # to var
+        assert gradcheck(grad_rot, (inputs, 40.0, (2, 2), True), nondet_tol=1e-4, raise_exception=True)
 
-        assert gradcheck(kornia.enhance.Denormalize(mean, std), (data,), raise_exception=True)
+    @pytest.mark.skip(reason="args and kwargs in decorator")
+    def test_jit(self, device, dtype):
+        batch_size, channels, height, width = 1, 2, 10, 20
+        inp = torch.rand(batch_size, channels, height, width, device=device, dtype=dtype)
+        op = enhance.equalize_clahe
+        op_script = torch.jit.script(op)
+        assert_close(op(inp), op_script(inp))
 
-    def test_single_value(self, device, dtype):
+    def test_module(self):
+        # equalize_clahe is only a function
+        pass
 
-        # prepare input data
-        mean = torch.tensor(2, device=device, dtype=dtype)
-        std = torch.tensor(3, device=device, dtype=dtype)
-        data = torch.ones(2, 3, 256, 313, device=device, dtype=dtype)
+    @pytest.fixture()
+    def img(self, device, dtype):
+        height, width = 20, 20
+        # TODO: test with a more realistic pattern
+        img = torch.arange(width, device=device).div(float(width - 1))[None].expand(height, width)[None][None]
+        return img
 
-        # expected output
-        expected = (data * std) + mean
-
-        assert_close(kornia.enhance.denormalize(data, mean, std), expected)
-
-    def test_module(self, device, dtype):
-        data = torch.ones(2, 3, 1, 1, device=device, dtype=dtype)
-        mean = torch.tensor([0.5, 1.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        std = torch.tensor([2.0, 2.0, 2.0], device=device, dtype=dtype).repeat(2, 1)
-        inputs = (data, mean, std)
-
-        op = kornia.enhance.denormalize
-        op_module = kornia.enhance.Denormalize(mean, std)
-
-        assert_close(op(*inputs), op_module(data))
-
-
-class TestNormalizeMinMax(BaseTester):
-    def test_smoke(self, device, dtype):
-        x = torch.ones(1, 1, 1, 1, device=device, dtype=dtype)
-        assert kornia.enhance.normalize_min_max(x) is not None
-        assert kornia.enhance.normalize_min_max(x) is not None
-
-    def test_exception(self, device, dtype):
-        x = torch.ones(1, 1, 3, 4, device=device, dtype=dtype)
-        with pytest.raises(TypeError):
-            assert kornia.enhance.normalize_min_max(0.0)
-
-        with pytest.raises(TypeError):
-            assert kornia.enhance.normalize_min_max(x, '', '')
-
-        with pytest.raises(TypeError):
-            assert kornia.enhance.normalize_min_max(x, 2.0, '')
-
-    @pytest.mark.parametrize("input_shape", [(1, 2, 3, 4), (2, 1, 4, 3), (1, 3, 2, 1)])
-    def test_cardinality(self, device, dtype, input_shape):
-        x = torch.rand(input_shape, device=device, dtype=dtype)
-        assert kornia.enhance.normalize_min_max(x).shape == input_shape
-
-    @pytest.mark.parametrize("min_val, max_val", [(1.0, 2.0), (2.0, 3.0), (5.0, 20.0), (40.0, 1000.0)])
-    def test_range(self, device, dtype, min_val, max_val):
-        x = torch.rand(1, 2, 4, 5, device=device, dtype=dtype)
-        out = kornia.enhance.normalize_min_max(x, min_val=min_val, max_val=max_val)
-        assert_close(out.min().item(), min_val)
-        assert_close(out.max().item(), max_val)
-
-    def test_values(self, device, dtype):
-        x = torch.tensor([[[[0.0, 1.0, 3.0], [-1.0, 4.0, 3.0], [9.0, 5.0, 2.0]]]], device=device, dtype=dtype)
-
-        expected = torch.tensor(
-            [[[[-0.8, -0.6, -0.2], [-1.0, 0.0, -0.2], [1.0, 0.2, -0.4]]]], device=device, dtype=dtype
+    def test_he(self, img):
+        # should be similar to enhance.equalize but slower. Similar because the lut is computed in a different way.
+        clip_limit: float = 0.0
+        grid_size: Tuple = (1, 1)
+        res = enhance.equalize_clahe(img, clip_limit=clip_limit, grid_size=grid_size)
+        # NOTE: for next versions we need to improve the computation of the LUT
+        # and test with a better image
+        assert torch.allclose(
+            res[..., 0, :],
+            torch.tensor(
+                [
+                    [
+                        [
+                            0.0471,
+                            0.0980,
+                            0.1490,
+                            0.2000,
+                            0.2471,
+                            0.2980,
+                            0.3490,
+                            0.3490,
+                            0.4471,
+                            0.4471,
+                            0.5490,
+                            0.5490,
+                            0.6471,
+                            0.6471,
+                            0.6980,
+                            0.7490,
+                            0.8000,
+                            0.8471,
+                            0.8980,
+                            1.0000,
+                        ]
+                    ]
+                ],
+                dtype=res.dtype,
+                device=res.device,
+            ),
+            atol=1e-04,
+            rtol=1e-04,
         )
 
-        actual = kornia.enhance.normalize_min_max(x, min_val=-1.0, max_val=1.0)
-        assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+    def test_ahe(self, img):
+        clip_limit: float = 0.0
+        grid_size: Tuple = (8, 8)
+        res = enhance.equalize_clahe(img, clip_limit=clip_limit, grid_size=grid_size)
+        # NOTE: for next versions we need to improve the computation of the LUT
+        # and test with a better image
+        assert torch.allclose(
+            res[..., 0, :],
+            torch.tensor(
+                [
+                    [
+                        [
+                            0.2471,
+                            0.4980,
+                            0.7490,
+                            0.6667,
+                            0.4980,
+                            0.4980,
+                            0.7490,
+                            0.4993,
+                            0.4980,
+                            0.2471,
+                            0.7490,
+                            0.4993,
+                            0.4980,
+                            0.2471,
+                            0.4980,
+                            0.4993,
+                            0.3333,
+                            0.2471,
+                            0.4980,
+                            1.0000,
+                        ]
+                    ]
+                ],
+                dtype=res.dtype,
+                device=res.device,
+            ),
+            atol=1e-04,
+            rtol=1e-04,
+        )
 
-    @pytest.mark.jit
-    def test_jit(self, device, dtype):
-        x = torch.ones(1, 1, 1, 1, device=device, dtype=dtype)
-        op = kornia.enhance.normalize_min_max
-        op_jit = torch.jit.script(op)
-        assert_close(op(x), op_jit(x))
-
-    @pytest.mark.grad
-    def test_gradcheck(self, device, dtype):
-        x = torch.ones(1, 1, 1, 1, device=device, dtype=torch.float64, requires_grad=True)
-        assert gradcheck(kornia.enhance.normalize_min_max, (x,), raise_exception=True)
-
-    @pytest.mark.skip(reason="not implemented yet")
-    @pytest.mark.nn
-    def test_module(self, device, dtype):
-        pass
+    def test_clahe(self, img):
+        clip_limit: float = 2.0
+        grid_size: Tuple = (8, 8)
+        res = enhance.equalize_clahe(img, clip_limit=clip_limit, grid_size=grid_size)
+        res_diff = enhance.equalize_clahe(img, clip_limit=clip_limit, grid_size=grid_size, slow_and_differentiable=True)
+        # NOTE: for next versions we need to improve the computation of the LUT
+        # and test with a better image
+        expected = torch.tensor(
+            [
+                [
+                    [
+                        0.1216,
+                        0.8745,
+                        0.9373,
+                        0.9163,
+                        0.8745,
+                        0.8745,
+                        0.9373,
+                        0.8745,
+                        0.8745,
+                        0.8118,
+                        0.9373,
+                        0.8745,
+                        0.8745,
+                        0.8118,
+                        0.8745,
+                        0.8745,
+                        0.8327,
+                        0.8118,
+                        0.8745,
+                        1.0000,
+                    ]
+                ]
+            ],
+            dtype=res.dtype,
+            device=res.device,
+        )
+        exp_diff = torch.tensor(
+            [
+                [
+                    [
+                        0.1250,
+                        0.8752,
+                        0.9042,
+                        0.9167,
+                        0.8401,
+                        0.8852,
+                        0.9302,
+                        0.9120,
+                        0.8750,
+                        0.8370,
+                        0.9620,
+                        0.9077,
+                        0.8750,
+                        0.8754,
+                        0.9204,
+                        0.9167,
+                        0.8370,
+                        0.8806,
+                        0.9096,
+                        1.0000,
+                    ]
+                ]
+            ],
+            dtype=res.dtype,
+            device=res.device,
+        )
+        assert torch.allclose(res[..., 0, :], expected, atol=1e-04, rtol=1e-04)
+        assert torch.allclose(res_diff[..., 0, :], exp_diff, atol=1e-04, rtol=1e-04)

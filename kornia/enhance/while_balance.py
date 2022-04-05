@@ -1,15 +1,10 @@
 """In this module several equalization methods are exposed: he, ahe, clahe."""
 
-from typing import Tuple
-
 import torch
-import torch.nn.functional as F
-from torchvision import transforms
 
 from kornia.utils.helpers import _torch_histc_cast
 from kornia.utils.image import perform_keep_shape_image
 from kornia.color import rgb_to_lab, lab_to_rgb
-from PIL import Image
 
 
 def gray_world_assumption(imgs: torch.Tensor) -> torch.Tensor:
@@ -56,16 +51,3 @@ def white_balance(imgs: torch.Tensor, gray_world = False, perfect_reflect = Fals
         result = perfect_reflector_assumption(imgs)
 
     return result
-
-
-if __name__ == '__main__':
-    # img = Image.open().convert('RGB')
-    # # img.show()
-    # tf1 = transforms.Compose([transforms.ToTensor()])
-    # toImg = transforms.ToPILImage()
-    # img = tf1(img).unsqueeze(0)
-    img = torch.rand((16,3,256,256))
-    output = white_balance(img, perfect_reflect=True)
-    output = toImg(output[0])
-    output.show()
-    # print(output.shape)
