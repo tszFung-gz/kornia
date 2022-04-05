@@ -874,6 +874,7 @@ def equalize(input: Tensor) -> Tensor:
     for image in input:
         # Assumes RGB for now.  Scales each channel independently
         # and then stacks the result.
+        # 最外层的循环是用来遍历batch里面的图像
         scaled_image = torch.stack([_scale_channel(image[i, :, :]) for i in range(len(image))])
         res.append(scaled_image)
     return torch.stack(res)
