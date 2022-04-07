@@ -1301,3 +1301,9 @@ class Invert(Module):
 
     def forward(self, input: Tensor) -> Tensor:
         return invert(input, self.max_val)
+
+
+if __name__ == '__main__':
+    input = torch.rand((16, 3, 256, 256))
+    output = equalize(input)
+    print(output.shape)
