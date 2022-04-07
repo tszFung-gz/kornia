@@ -2,12 +2,18 @@
 
 import torch
 
-from kornia.utils.helpers import _torch_histc_cast
-from kornia.utils.image import perform_keep_shape_image
 from kornia.color import rgb_to_lab, lab_to_rgb
 
 
-def gray_world_assumption(imgs: torch.Tensor) -> torch.Tensor:
+def white_balance_gwa(imgs: torch.Tensor) -> torch.Tensor:
+    """_summary_
+        gray_world_assumption
+    Args:
+        imgs (torch.Tensor): _description_
+
+    Returns:
+        torch.Tensor: _description_
+    """
     result = rgb_to_lab(imgs)
     avg_a = torch.mean(result[:, 1, :, :])
     avg_b = torch.mean(result[:, 2, :, :])
@@ -16,19 +22,32 @@ def gray_world_assumption(imgs: torch.Tensor) -> torch.Tensor:
     result[:, :, :, :] = lab_to_rgb(result[:, :, :, :])
     return result
 
-def perfect_reflector_assumption(imgs: torch.Tensor) -> torch.Tensor:
+def white_balance_pra(imgs: torch.Tensor) -> torch.Tensor:
+    """perfect_reflector_assumption
+
+    Args:
+        imgs (torch.Tensor): _description_
+
+    Returns:
+        torch.Tensor: _description_
+    """
     r, g, b = torch.split(imgs, split_size_or_sections=1, dim=1)
     MaxVal = torch.max(torch.max(torch.maximum(torch.maximum(r, g), b), dim=2)[0], dim=2)[0]
     ratio = 0.05
     ratio = imgs.shape[2] * imgs.shape[3] * ratio
 
 
-def dynamic_threshold(imgs: torch.Tensor):
+def white_balance_dynamic(imgs: torch.Tensor):
+    """dynamic_threshold
+
+    Args:
+        imgs (torch.Tensor): _description_
+    """
     print(imgs.shape)
 
 
 
-def white_balance(imgs: torch.Tensor, gray_world = False, perfect_reflect = False) -> torch.Tensor:
+def white_balance(imgs: torch.Tensor) -> torch.Tensor:
     """_summary_
 
     Args:
@@ -45,9 +64,4 @@ def white_balance(imgs: torch.Tensor, gray_world = False, perfect_reflect = Fals
         raise TypeError(f"Input type is not a torch.Tensor. Got {type(imgs)}")
     if len(imgs.shape) < 3 or imgs.shape[-3] != 3:
         raise ValueError(f"Input size must have a shape of (*, 3, H, W). Got {imgs.shape}")
-    if gray_world:
-        result = gray_world_assumption(imgs)
-    elif perfect_reflect:
-        result = perfect_reflector_assumption(imgs)
-
     return result
