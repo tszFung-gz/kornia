@@ -64,4 +64,19 @@ def white_balance(imgs: torch.Tensor) -> torch.Tensor:
         raise TypeError(f"Input type is not a torch.Tensor. Got {type(imgs)}")
     if len(imgs.shape) < 3 or imgs.shape[-3] != 3:
         raise ValueError(f"Input size must have a shape of (*, 3, H, W). Got {imgs.shape}")
+    r, g, b = cv2.split(img)
+    r_avg = cv2.mean(r)[0]
+    g_avg = cv2.mean(g)[0]
+    b_avg = cv2.mean(b)[0]
+    # 求各個通道所佔增益
+    k = (r_avg + g_avg + b_avg) / 3
+    kr = k / r_avg
+    kg = k / g_avg
+    kb = k / b_avg
+    r = kornia.enhance.add_weighted(src1=r, alpha=kr, src2=0, beta=0, gamma=0)
+    g = kornia.enhance.add_weighted(src1=g, alpha=kg, src2=0, beta=0, gamma=0)
+    b = kornia.enhance.add_weighted(src1=b, alpha=kb, src2=0, beta=0, gamma=0)
+    balance_img = cv2.merge([b, g, r])
+    return balance_img
+
     return result
