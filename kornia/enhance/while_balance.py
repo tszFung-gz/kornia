@@ -68,7 +68,6 @@ def white_balance(imgs: torch.Tensor) -> torch.Tensor:
     r_avg = cv2.mean(r)[0]
     g_avg = cv2.mean(g)[0]
     b_avg = cv2.mean(b)[0]
-    # 求各個通道所佔增益
     k = (r_avg + g_avg + b_avg) / 3
     kr = k / r_avg
     kg = k / g_avg
